@@ -1,6 +1,8 @@
 #!/bin/sh
 # macOS 用の OpenHinoVoice.app を作る。使い方: scripts/macos/bundle.sh [出力先フォルダ]
 # 出力先を省くと target/release に置く。署名は自分の Mac で動かすためのアドホック署名
+# アドホック署名は作り直すたびに変わり、アクセシビリティの許可が外れる。
+# 証明書があれば CODESIGN_IDENTITY="名前" を付けて実行すると、作り直しても許可が残る
 set -eu
 
 cd "$(dirname "$0")/../.."
@@ -46,5 +48,5 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$app"
+codesign --force --sign "${CODESIGN_IDENTITY:--}" "$app"
 echo "$app"

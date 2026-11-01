@@ -71,6 +71,21 @@ impl FileLock {
     }
 }
 
+/// 設定の "Ctrl+Alt+V" を、Mac のキーの名前で "control + option + V" と書く
+pub fn hotkey_label(hotkey: &str) -> String {
+    hotkey
+        .split('+')
+        .map(|part| match part.trim().to_ascii_uppercase().as_str() {
+            "CTRL" | "CONTROL" => "control".to_string(),
+            "ALT" | "OPTION" | "OPT" => "option".to_string(),
+            "WIN" | "CMD" | "COMMAND" => "command".to_string(),
+            "SHIFT" => "shift".to_string(),
+            _ => part.trim().to_ascii_uppercase(),
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
 /// 既定のブラウザで開く
 pub fn open_url(url: &str) {
     let _ = std::process::Command::new("/usr/bin/open").arg(url).spawn();
@@ -100,6 +115,13 @@ mod tests {
         drop(first);
         assert!(FileLock::try_acquire(&name).is_some());
         let _ = std::fs::remove_file(app_dir().join(format!(".{name}.lock")));
+    }
+
+    #[test]
+    fn hotkey_label_uses_mac_key_names() {
+        assert_eq!(hotkey_label("Ctrl+Alt+V"), "control + option + V");
+        assert_eq!(hotkey_label("cmd+shift+j"), "command + shift + J");
+        assert_eq!(hotkey_label("F8"), "F8");
     }
 
     #[test]

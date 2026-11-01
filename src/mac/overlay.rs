@@ -253,6 +253,42 @@ pub fn pump() {
     }
 }
 
+/// 「アクセシビリティ」の許可が出るまで、案内を出して待つ。許可の前に終了を選ばれたら false
+/// 許可がないと何も受け取れないが、終わってしまうと「起動しない」ように見えるので待ち続ける
+pub fn wait_for_accessibility() -> bool {
+    use std::time::Duration;
+    if accessibility_trusted(false) {
+        return true;
+    }
+    // システムの案内(「システム設定を開く」)を出す
+    accessibility_trusted(true);
+    let notice = || {
+        Mode::Notice {
+        tone: Tone::Warn,
+        text: "システム設定 > プライバシーとセキュリティ > アクセシビリティ で OpenHinoVoice をオンにしてください".into(),
+    }
+    };
+    show(notice());
+    let mut shown_at = Instant::now();
+    loop {
+        pump();
+        tick();
+        if EXIT_REQUESTED.load(Ordering::SeqCst) {
+            return false;
+        }
+        if accessibility_trusted(false) {
+            hide();
+            return true;
+        }
+        // 別の画面に移ったときにも見えるよう、ときどき出し直す
+        if shown_at.elapsed() >= Duration::from_secs(10) {
+            show(notice());
+            shown_at = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// 表示内容を切り替える。非表示からの表示では、いま使っている画面の上端に出す
 pub fn show(mode: Mode) {
     let mut o = lock();

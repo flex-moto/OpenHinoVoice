@@ -71,9 +71,6 @@ pub fn set_hotkey(hotkey: Hotkey) {
 pub fn install(sender: Sender<KeyEvent>, hotkey: Hotkey) -> Result<(), String> {
     let _ = SENDER.set(sender);
     set_hotkey(hotkey);
-    if !accessibility_trusted(true) {
-        return Err(PERMISSION_MESSAGE.into());
-    }
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     std::thread::Builder::new()
         .name("openhinovoice-keys".into())

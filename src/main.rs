@@ -668,6 +668,12 @@ fn main() {
     } else {
         "singleton"
     }) else {
+        // メニューバーだけの常駐アプリなので、もう一度開かれても何も見えない。代わりに設定画面を出す
+        if !settings_mode {
+            if let Ok(exe) = std::env::current_exe() {
+                let _ = std::process::Command::new(exe).arg("--settings").spawn();
+            }
+        }
         return;
     };
     // 高解像度の画面で表示がぼやけないよう、モニターごとの拡大率を自分で扱う
@@ -700,6 +706,12 @@ fn main() {
         return;
     }
 
+    #[cfg(target_os = "macos")]
+    if !overlay::wait_for_accessibility() {
+        overlay::remove_tray();
+        return;
+    }
+
     let (key_tx, key_rx) = channel::<hook::KeyEvent>();
     if let Err(e) = hook::install(key_tx, hotkey) {
         overlay::show_error(&e);
@@ -717,6 +729,18 @@ fn main() {
         failed_pastes: VecDeque::new(),
     };
     hook::set_mirror(hook::MIRROR_IDLE);
+    // Dock にもウィンドウにも出ないので、起動したことと録音のキーを上端に少しだけ出す
+    #[cfg(target_os = "macos")]
+    {
+        overlay::show(overlay::Mode::Notice {
+            tone: overlay::Tone::Warn,
+            text: format!(
+                "起動しました。{} で録音します",
+                mac::hotkey_label(&app.cfg.hotkey)
+            ),
+        });
+        app.transient_until = Some(Instant::now() + Duration::from_millis(3500));
+    }
 
     #[cfg(windows)]
     let mut msg = MSG::default();
