@@ -131,6 +131,8 @@ pub fn show_error(message: &str) {
     alert.setMessageText(&NSString::from_str("OpenHinoVoice"));
     alert.setInformativeText(&NSString::from_str(message));
     alert.runModal();
+    // 前面に出たままだと、下の pump が「もう一度開かれた」と取り違える
+    app.deactivate();
 }
 
 pub fn create() -> Result<Owner, String> {
@@ -217,6 +219,14 @@ pub fn remove_tray() {
     UI.with(|ui| ui.borrow_mut().take());
 }
 
+static WAS_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+fn open_settings() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(exe).arg("--settings").spawn();
+    }
+}
+
 /// メインループから毎回呼ぶ。たまった画面の出来事と、メニューの選択を処理する
 pub fn pump() {
     let Some(mtm) = MainThreadMarker::new() else {
@@ -237,13 +247,24 @@ pub fn pump() {
             None => break,
         }
     }
+    // 常駐中に Finder や Dock からもう一度開かれると、macOS は新しく起動せずにこのアプリを前面に出す。
+    // ウィンドウを持たないので、前面に出たときだけ設定画面を開いて、開いたことが見えるようにする
+    // 起動した直後は、開いた操作そのもので前面に出るので数えない
+    static LAUNCHED: OnceLock<Instant> = OnceLock::new();
+    let launching =
+        LAUNCHED.get_or_init(Instant::now).elapsed() < std::time::Duration::from_secs(2);
+    let active = app.isActive();
+    if launching {
+        WAS_ACTIVE.store(active, Ordering::SeqCst);
+    } else if active && !WAS_ACTIVE.swap(true, Ordering::SeqCst) {
+        app.deactivate();
+        open_settings();
+    } else if !active {
+        WAS_ACTIVE.store(false, Ordering::SeqCst);
+    }
     while let Ok(event) = MenuEvent::receiver().try_recv() {
         match event.id.as_ref() {
-            MENU_SETTINGS => {
-                if let Ok(exe) = std::env::current_exe() {
-                    let _ = std::process::Command::new(exe).arg("--settings").spawn();
-                }
-            }
+            MENU_SETTINGS => open_settings(),
             MENU_RECOVER if RECOVERY_COUNT.load(Ordering::SeqCst) > 0 => {
                 RECOVERY_REQUESTED.store(true, Ordering::SeqCst);
             }

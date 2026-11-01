@@ -76,7 +76,9 @@ Intel の Mac には配布版がないので、[speech.cpp の手順](https://gi
 scripts/macos/bundle.sh
 ```
 
-`target/release/OpenHinoVoice.app` ができます。「アプリケーション」フォルダに移してから開いてください。
+`target/release/OpenHinoVoice.app` ができます。「アプリケーション」フォルダに移してから開いてください。`scripts/macos/bundle.sh /Applications` とすると、直接「アプリケーション」フォルダに作ります。
+
+メニューバーだけで動くアプリなので、開いても画面上部に「起動しました」と少し出るだけです。動いているときにもう一度開くと、設定の画面が開きます。
 
 ### 3. 許可を出す
 
