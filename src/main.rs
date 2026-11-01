@@ -7,12 +7,19 @@ mod config;
 mod context;
 mod format;
 mod history;
+#[cfg_attr(target_os = "macos", path = "mac/hook.rs")]
 mod hook;
 mod lexicon;
+#[cfg(target_os = "macos")]
+mod mac;
+#[cfg_attr(target_os = "macos", path = "mac/overlay.rs")]
 mod overlay;
+mod overlay_draw;
+#[cfg_attr(target_os = "macos", path = "mac/paste.rs")]
 mod paste;
 mod settings;
 mod sound;
+#[cfg_attr(target_os = "macos", path = "mac/startup.rs")]
 mod startup;
 mod state;
 
@@ -27,11 +34,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(windows)]
 use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, LPARAM, WPARAM};
+#[cfg(windows)]
 use windows::Win32::System::Threading::CreateMutexW;
+#[cfg(windows)]
 use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
 };
@@ -638,6 +649,7 @@ impl App {
 fn main() {
     let settings_mode = std::env::args().any(|a| a == "--settings");
     // 二重に起動するとキーの横取りが重なるので、2 つ目は何もせずに終わる。設定ウィンドウも 1 つだけ開く
+    #[cfg(windows)]
     let _single = unsafe {
         let name = if settings_mode {
             windows::core::w!("Local\\OpenHinoVoice.Settings")
@@ -650,7 +662,16 @@ fn main() {
         }
         handle
     };
+    #[cfg(target_os = "macos")]
+    let Some(_single) = mac::FileLock::try_acquire(if settings_mode {
+        "settings"
+    } else {
+        "singleton"
+    }) else {
+        return;
+    };
     // 高解像度の画面で表示がぼやけないよう、モニターごとの拡大率を自分で扱う
+    #[cfg(windows)]
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
@@ -667,7 +688,9 @@ fn main() {
             return;
         }
     };
-    let hotkey = config::parse_hotkey(&cfg.hotkey).unwrap_or(config::Hotkey { mods: 0, vk: 0x77 });
+    let hotkey = config::parse_hotkey(&cfg.hotkey)
+        .or_else(|| config::parse_hotkey(&config::default_hotkey()))
+        .unwrap_or(config::Hotkey { mods: 0, vk: 0x77 });
     overlay::set_theme(&cfg.theme);
     let mut config_mtime = config_modified();
     let mut last_config_check = Instant::now();
@@ -695,6 +718,7 @@ fn main() {
     };
     hook::set_mirror(hook::MIRROR_IDLE);
 
+    #[cfg(windows)]
     let mut msg = MSG::default();
     loop {
         if overlay::EXIT_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) {
@@ -704,6 +728,9 @@ fn main() {
         if overlay::take_recovery_request() {
             app.copy_failed_text();
         }
+        #[cfg(target_os = "macos")]
+        overlay::pump();
+        #[cfg(windows)]
         unsafe {
             while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
                 if msg.message == WM_QUIT {
@@ -775,8 +802,11 @@ fn main() {
     app.teardown_session();
     hook::uninstall();
     overlay::remove_tray();
-    let _ = LPARAM(0);
-    let _ = WPARAM(0);
+    #[cfg(windows)]
+    {
+        let _ = LPARAM(0);
+        let _ = WPARAM(0);
+    }
 }
 
 fn idle_sleep_duration(state: &State, transient: bool, overlay_visible: bool) -> Duration {

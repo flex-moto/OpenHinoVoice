@@ -11,6 +11,9 @@ mod config;
 mod format;
 #[path = "../src/lexicon.rs"]
 mod lexicon;
+#[cfg(target_os = "macos")]
+#[path = "../src/mac/mod.rs"]
+mod mac;
 
 #[test]
 #[ignore = "calls the real formatting API with the key in the user config; run explicitly"]

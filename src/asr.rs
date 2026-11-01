@@ -1,12 +1,14 @@
 use base64::Engine;
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{channel, sync_channel, Receiver, SyncSender, TryRecvError, TrySendError};
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 // Initial model setup can take longer than an ordinary transcription. Both
@@ -259,14 +261,20 @@ pub struct Worker {
 
 impl Worker {
     pub fn spawn(exe: &str, model: &str) -> Result<Worker, AsrError> {
-        let mut child = Command::new(exe)
+        let mut command = Command::new(exe);
+        command
             .arg("worker")
             .arg(model)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            // speech.exe はコンソールアプリなので、指定しないと録音のたびに黒い窓が開く
-            .creation_flags(CREATE_NO_WINDOW)
+            .stderr(Stdio::null());
+        // Intel の Mac では、speech.cpp の Metal が GPU(Radeon など)で落ちる。CPU でも十分に速い
+        #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+        command.args(["--device", "cpu"]);
+        // speech.exe はコンソールアプリなので、指定しないと録音のたびに黒い窓が開く
+        #[cfg(windows)]
+        command.creation_flags(CREATE_NO_WINDOW);
+        let mut child = command
             .spawn()
             .map_err(|e| AsrError::Spawn(e.to_string()))?;
         let stdin = child
@@ -810,6 +818,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn shutdown_kills_a_child_that_never_reads_its_pipe() {
         // One process, no model or microphone. It deliberately keeps stdin

@@ -31,7 +31,12 @@ pub fn process_name(pid: u32) -> Option<String> {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+pub fn process_name(pid: u32) -> Option<String> {
+    crate::mac::process_name(pid)
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub fn process_name(_pid: u32) -> Option<String> {
     None
 }

@@ -13,6 +13,9 @@ mod config;
 mod format;
 #[path = "../src/lexicon.rs"]
 mod lexicon;
+#[cfg(target_os = "macos")]
+#[path = "../src/mac/mod.rs"]
+mod mac;
 
 #[test]
 #[ignore = "needs the speech.cpp worker, a Haas model and a test WAV; run explicitly"]

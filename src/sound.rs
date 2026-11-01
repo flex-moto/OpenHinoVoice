@@ -22,6 +22,36 @@ fn wav(sound: Sound) -> &'static [u8] {
 }
 
 /// 鳴らし終わらずに次を鳴らすと前の音は止まる。音量 0 なら鳴らさない
+#[cfg(target_os = "macos")]
+pub fn play(sound: Sound, volume: u8) {
+    use objc2::rc::Retained;
+    use objc2::AllocAnyThread;
+    use objc2_app_kit::NSSound;
+    use objc2_foundation::NSData;
+    use std::cell::RefCell;
+    // 鳴っている途中で手放すと止まるので、次の音まで持っておく
+    thread_local! {
+        static PLAYING: RefCell<Option<Retained<NSSound>>> = const { RefCell::new(None) };
+    }
+    if volume == 0 {
+        return;
+    }
+    let bytes = scaled(sound, volume.min(100));
+    let data = NSData::with_bytes(bytes);
+    let Some(player) = NSSound::initWithData(NSSound::alloc(), &data) else {
+        return;
+    };
+    PLAYING.with(|slot| {
+        if let Some(previous) = slot.borrow_mut().take() {
+            previous.stop();
+        }
+        player.play();
+        *slot.borrow_mut() = Some(player);
+    });
+}
+
+/// 鳴らし終わらずに次を鳴らすと前の音は止まる。音量 0 なら鳴らさない
+#[cfg(windows)]
 pub fn play(sound: Sound, volume: u8) {
     use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
     if volume == 0 {

@@ -54,6 +54,49 @@ irm https://raw.githubusercontent.com/nyosegawa/speech.cpp/main/install.ps1 | ie
 
 メモ帳を開いて、録音を始めるキーを押してから話してみてください。話し終わったら Enter を押します。最初の 1 回だけは、認識モデル(約 0.35GB)のダウンロードに 1 分ほどかかります。
 
+## macOS で使う(試験版)
+
+macOS 版も、Windows 版と同じ使い方で動きます。いまはソースからビルドして使います。
+
+### 1. speech.cpp を入れる
+
+Apple シリコンの Mac では、ターミナルで次の 1 行を実行します。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/nyosegawa/speech.cpp/main/install.sh | sh
+```
+
+Intel の Mac には配布版がないので、[speech.cpp の手順](https://github.com/nyosegawa/speech.cpp/blob/main/docs/install.md#build-from-source)でソースからビルドし、できた `build/speech` を `~/.local/bin/speech` にリンクします(CMake 3.20 以上が必要です)。Intel の Mac では GPU の Metal で落ちるため、OpenHinoVoice は speech.cpp を CPU で動かします。CPU でも十分に速く認識できます。
+
+### 2. アプリを作る
+
+[Rust](https://rustup.rs) を入れてから、このリポジトリで次を実行します。
+
+```sh
+scripts/macos/bundle.sh
+```
+
+`target/release/OpenHinoVoice.app` ができます。「アプリケーション」フォルダに移してから開いてください。
+
+### 3. 許可を出す
+
+初めて開くと、次の 2 つの許可を求められます。
+
+- **アクセシビリティ**: キー操作を受け取り、文字を貼り付けるために使います。「システム設定 > プライバシーとセキュリティ > アクセシビリティ」で OpenHinoVoice をオンにして、アプリを開き直してください
+- **マイク**: 初めて録音するときに聞かれます
+
+アプリを作り直すと、アクセシビリティの許可が外れることがあります。そのときは一覧から OpenHinoVoice を一度消し、もう一度オンにしてください。
+
+### Windows 版との違い
+
+| 項目 | macOS |
+|---|---|
+| 録音を始めるキー | 初めは control + option + V(Mac の F キーは音量などを兼ねるため)。設定の画面で変えられます。Alt は option、Win(Cmd) は command キーです |
+| アイコン | 画面右上のメニューバーに、白い縁の赤い丸が出ます |
+| 設定と履歴の場所 | `~/Library/Application Support/OpenHinoVoice` |
+| 秘密の情報の暗号化 | 鍵をキーチェーンに置き、AES-256-GCM で暗号化します(Windows では DPAPI) |
+| 自動起動 | `~/Library/LaunchAgents/io.github.openhinovoice.plist` を置きます |
+
 ## AI に導入を任せる
 
 Claude Code や Codex などのコーディング AI を使っているなら、導入をそのまま任せられます。このリポジトリの [AGENTS.md](AGENTS.md) に、AI 向けの手順を書いてあります。次の文をそのまま AI に渡してください。

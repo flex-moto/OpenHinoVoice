@@ -1,6 +1,6 @@
 //! Sign in with ChatGPT(オープンソース向けの ChatGPT プラン利用)。
 //! 手順は https://developers.openai.com/siwc/token-sharing-open-source に従う。
-//! ブラウザで認可し、127.0.0.1 の受け口でコードを受け取り、トークンに換えて DPAPI で暗号化して保存する。
+//! ブラウザで認可し、127.0.0.1 の受け口でコードを受け取り、トークンに換えて暗号化して保存する(Windows は DPAPI、macOS はキーチェーンの鍵)。
 
 use crate::format::FormatError;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -582,6 +582,20 @@ fn pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(sha256(verifier.as_bytes()))
 }
 
+#[cfg(target_os = "macos")]
+fn sha256(data: &[u8]) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(data).into()
+}
+
+#[cfg(target_os = "macos")]
+fn random_bytes(n: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; n];
+    getrandom::fill(&mut buf).expect("system random number generator failed");
+    buf
+}
+
+#[cfg(windows)]
 fn sha256(data: &[u8]) -> [u8; 32] {
     use windows::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
     let mut out = [0u8; 32];
@@ -590,6 +604,7 @@ fn sha256(data: &[u8]) -> [u8; 32] {
     out
 }
 
+#[cfg(windows)]
 fn random_bytes(n: usize) -> Vec<u8> {
     use windows::Win32::Security::Cryptography::{
         BCryptGenRandom, BCRYPT_USE_SYSTEM_PREFERRED_RNG,
@@ -663,6 +678,12 @@ fn hex_byte(pair: &[u8]) -> Option<u8> {
     u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) fn open_browser(url: &str) {
+    crate::mac::open_url(url);
+}
+
+#[cfg(windows)]
 pub(crate) fn open_browser(url: &str) {
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
@@ -680,8 +701,23 @@ pub(crate) fn open_browser(url: &str) {
 }
 
 /// プロセスをまたいだ排他。名前付きミューテックスを取り、抜けるときに離す
+#[cfg(windows)]
 struct NamedLock(windows::Win32::Foundation::HANDLE);
 
+/// プロセスをまたいだ排他。macOS ではファイルのロックを取り、抜けるときに離す
+#[cfg(target_os = "macos")]
+struct NamedLock(#[allow(dead_code)] crate::mac::FileLock);
+
+#[cfg(target_os = "macos")]
+impl NamedLock {
+    fn acquire(name: &str) -> Result<NamedLock, String> {
+        crate::mac::FileLock::acquire(name, std::time::Duration::from_secs(30))
+            .map(NamedLock)
+            .map_err(|e| format!("ChatGPTの排他ロックを取得できません: {e}"))
+    }
+}
+
+#[cfg(windows)]
 impl NamedLock {
     fn acquire(name: &str) -> Result<NamedLock, String> {
         use windows::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
@@ -703,6 +739,7 @@ impl NamedLock {
     }
 }
 
+#[cfg(windows)]
 impl Drop for NamedLock {
     fn drop(&mut self) {
         unsafe {
@@ -712,6 +749,10 @@ impl Drop for NamedLock {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) use crate::mac::secret as dpapi;
+
+#[cfg(windows)]
 pub(crate) mod dpapi {
     use windows::Win32::Foundation::{LocalFree, HLOCAL};
     use windows::Win32::Security::Cryptography::{

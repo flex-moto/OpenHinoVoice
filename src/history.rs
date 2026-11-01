@@ -1,17 +1,21 @@
-//! 復旧用の短期履歴（DPAPI 暗号化）と、利用者が opt-in した改善用の整形ログ。
+//! 復旧用の短期履歴（Windows は DPAPI、macOS はキーチェーンの鍵で暗号化）と、利用者が opt-in した改善用の整形ログ。
 use crate::config::{self, FormatConfig};
 use crate::format::FormatError;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
+#[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(windows)]
 use windows::core::w;
+#[cfg(windows)]
 use windows::Win32::Foundation::CloseHandle;
+#[cfg(windows)]
 use windows::Win32::System::Threading::{CreateMutexW, ReleaseMutex, WaitForSingleObject};
 
 const MAX_HISTORY_BYTES: u64 = 16 * 1024 * 1024;
@@ -185,8 +189,32 @@ fn check_text_size(value: &str) -> io::Result<()> {
 
 /// The app and the independent settings process both access these files.
 /// A named Windows mutex serializes updates, pruning and explicit clearing.
+#[cfg(windows)]
 struct RecoveryLock(windows::Win32::Foundation::HANDLE);
 
+/// macOS ではファイルのロックで、常駐側と設定画面の書き込みを順番にする
+#[cfg(target_os = "macos")]
+struct RecoveryLock(#[allow(dead_code)] crate::mac::FileLock);
+
+#[cfg(target_os = "macos")]
+impl RecoveryLock {
+    fn acquire() -> io::Result<Self> {
+        crate::mac::FileLock::acquire("recovery-history", Duration::from_secs(5))
+            .map(Self)
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::TimedOut {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "復旧履歴の排他ロックを取得できません",
+                    )
+                } else {
+                    e
+                }
+            })
+    }
+}
+
+#[cfg(windows)]
 impl RecoveryLock {
     fn acquire() -> io::Result<Self> {
         let handle =
@@ -205,6 +233,7 @@ impl RecoveryLock {
     }
 }
 
+#[cfg(windows)]
 impl Drop for RecoveryLock {
     fn drop(&mut self) {
         unsafe {
@@ -349,11 +378,13 @@ fn write_entry(path: &Path, entry: &RecoveryEntry) -> io::Result<()> {
     result
 }
 
+#[cfg(windows)]
 #[link(name = "kernel32")]
 extern "system" {
     fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
 }
 
+#[cfg(windows)]
 fn wide_path(path: &Path) -> Vec<u16> {
     path.as_os_str()
         .encode_wide()
@@ -361,6 +392,18 @@ fn wide_path(path: &Path) -> Vec<u16> {
         .collect()
 }
 
+/// rename は同じボリュームの中なら置き換えが一度に起こる。途中で切れても古い中身か新しい中身のどちらかが残る
+#[cfg(not(windows))]
+fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
+    fs::rename(source, destination)?;
+    if let Some(dir) = destination.parent() {
+        // 置き換えたことをディスクに残す
+        let _ = fs::File::open(dir).and_then(|d| d.sync_all());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn atomic_replace(source: &Path, destination: &Path) -> io::Result<()> {
     // REPLACE_EXISTING | WRITE_THROUGH. No truncate window when updating a saved transcript.
     let moved = unsafe {

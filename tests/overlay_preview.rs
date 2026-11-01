@@ -1,5 +1,6 @@
 // Integration crates compile full production modules but use only a subset of their APIs.
 #![allow(dead_code)]
+#![cfg(windows)]
 
 use std::time::{Duration, Instant};
 use windows::Win32::UI::HiDpi::{
@@ -11,6 +12,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 #[path = "../src/overlay.rs"]
 mod overlay;
+#[path = "../src/overlay_draw.rs"]
+mod overlay_draw;
 
 use overlay::{Mode, Tone};
 

@@ -1,5 +1,6 @@
 // Integration crates compile full production modules but use only a subset of their APIs.
 #![allow(dead_code)]
+#![cfg(windows)]
 
 #[path = "../src/paste.rs"]
 mod paste;

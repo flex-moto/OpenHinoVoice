@@ -31,17 +31,65 @@ fn upgrade_legacy_defaults(cfg: &mut FormatConfig) {
     cfg.prompt = current_prompt(&cfg.prompt);
 }
 
-pub const EXAMPLE_TOML: &str = r#"# speech.cpp の speech.exe。空なら %LOCALAPPDATA%\Programs\speech.cpp の最新版か、PATH 上の speech.exe を使う
+// OS ごとに違う行。EXAMPLE_TOML の concat! に文字列のまま埋め込む
+#[cfg(not(target_os = "macos"))]
+macro_rules! example_speech {
+    () => {
+        r#"# speech.cpp の speech.exe。空なら %LOCALAPPDATA%\Programs\speech.cpp の最新版か、PATH 上の speech.exe を使う"#
+    };
+}
+#[cfg(target_os = "macos")]
+macro_rules! example_speech {
+    () => {
+        r#"# speech.cpp の speech。空なら ~/.local/bin/speech か、PATH 上の speech を使う"#
+    };
+}
+#[cfg(not(target_os = "macos"))]
+macro_rules! example_hotkey {
+    () => {
+        r#"hotkey = "F8""#
+    };
+}
+// Mac のキーボードは F キーがメディアキーを兼ねるので、修飾キー付きの組み合わせを既定にする
+#[cfg(target_os = "macos")]
+macro_rules! example_hotkey {
+    () => {
+        r#"# Ctrl は control、Alt は option、Win は command キー
+hotkey = "Ctrl+Alt+V""#
+    };
+}
+#[cfg(not(target_os = "macos"))]
+macro_rules! os_name {
+    () => {
+        "Windows"
+    };
+}
+#[cfg(target_os = "macos")]
+macro_rules! os_name {
+    () => {
+        "macOS"
+    };
+}
+
+pub const EXAMPLE_TOML: &str = concat!(
+    example_speech!(),
+    r#"
 speech_exe = ""
 # 認識モデル。speech.cpp のモデル名か .gguf のパス。名前なら初回に自動で取得する
 model = "haas-ja-v1.0:q4_k"
-hotkey = "F8"
+"#,
+    example_hotkey!(),
+    r#"
 # 最大録音時間(分)。1、3、5、10から選択。到達時は自動で認識へ進む
 max_recording_minutes = 5
-# 録音中の表示の色。"hinomaru"(白地に赤い点)か "auto"(Windows のライト、ダークに合わせる)
+# 録音中の表示の色。"hinomaru"(白地に赤い点)か "auto"("#,
+    os_name!(),
+    r#" のライト、ダークに合わせる)
 theme = "hinomaru"
 words = ""
-# 録音デバイス名。空なら Windows の既定マイクを使う
+# 録音デバイス名。空なら "#,
+    os_name!(),
+    r#" の既定マイクを使う
 microphone = ""
 # 未入力テキストの再貼り付けに使う短期履歴。初期値オン
 recovery_history = true
@@ -73,7 +121,8 @@ prompt = """
 # リクエスト本体に混ぜる項目。deepseek-v4.1-flash は推論を止めないと応答が倍近く遅くなる
 [format.extra_body]
 reasoning_effort = "none"
-"#;
+"#
+);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct FormatConfig {
@@ -178,8 +227,12 @@ pub struct Config {
 fn default_asr_model() -> String {
     "haas-ja-v1.0:q4_k".to_string()
 }
-fn default_hotkey() -> String {
-    "F8".to_string()
+pub fn default_hotkey() -> String {
+    if cfg!(target_os = "macos") {
+        "Ctrl+Alt+V".to_string()
+    } else {
+        "F8".to_string()
+    }
 }
 fn default_max_recording_minutes() -> u32 {
     5
@@ -205,11 +258,17 @@ impl Config {
     }
 }
 
+#[cfg(not(target_os = "macos"))]
 pub fn config_path() -> PathBuf {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
     base.join("OpenHinoVoice").join("config.toml")
+}
+
+#[cfg(target_os = "macos")]
+pub fn config_path() -> PathBuf {
+    crate::mac::app_dir().join("config.toml")
 }
 
 /// API キーは ChatGPT トークンと同様に Windows DPAPI で保護した別ファイルに保存する。
@@ -378,7 +437,45 @@ pub fn load() -> Result<Config, String> {
     Ok(cfg)
 }
 
+/// speech.cpp の導入スクリプトが置く ~/.local/bin/speech か、~/.local/share/speech.cpp/<版>/speech の最新版を探す。
+/// 常駐アプリには端末の PATH が渡らないので、Homebrew の場所も見る。なければ PATH に任せる
+#[cfg(target_os = "macos")]
+pub fn find_speech_exe() -> String {
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let newest = std::fs::read_dir(home.join(".local/share/speech.cpp"))
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .map(|e| e.path().join("speech"))
+        .filter(|p| p.is_file())
+        .max_by_key(|p| {
+            version_key(
+                p.parent()
+                    .and_then(|d| d.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(""),
+            )
+        });
+    let candidates = [
+        Some(home.join(".local/bin/speech")),
+        newest,
+        Some(PathBuf::from("/opt/homebrew/bin/speech")),
+        Some(PathBuf::from("/usr/local/bin/speech")),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|p| p.is_file())
+        .map_or_else(
+            || "speech".to_string(),
+            |p| p.to_string_lossy().into_owned(),
+        )
+}
+
 /// speech.cpp の標準の導入先(%LOCALAPPDATA%\Programs\speech.cpp\<版>\speech.exe)から最新版を探す。なければ PATH に任せる
+#[cfg(not(target_os = "macos"))]
 pub fn find_speech_exe() -> String {
     let root = std::env::var_os("LOCALAPPDATA")
         .map(|d| PathBuf::from(d).join("Programs").join("speech.cpp"));
@@ -492,9 +589,9 @@ pub fn parse_hotkey(name: &str) -> Option<Hotkey> {
     for part in name.split('+').map(|p| p.trim().to_ascii_uppercase()) {
         match part.as_str() {
             "CTRL" | "CONTROL" => mods |= MOD_CTRL,
-            "ALT" => mods |= MOD_ALT,
+            "ALT" | "OPTION" | "OPT" => mods |= MOD_ALT,
             "SHIFT" => mods |= MOD_SHIFT,
-            "WIN" => mods |= MOD_WIN,
+            "WIN" | "CMD" | "COMMAND" => mods |= MOD_WIN,
             key if vk.is_none() => vk = Some(parse_key(key)?),
             _ => return None,
         }
@@ -546,7 +643,8 @@ mod tests {
         let cfg = parse(EXAMPLE_TOML).expect("example must parse");
         assert_eq!(cfg.speech_exe, "");
         assert_eq!(cfg.model, "haas-ja-v1.0:q4_k");
-        assert_eq!(cfg.hotkey, "F8");
+        assert_eq!(cfg.hotkey, default_hotkey());
+        assert!(parse_hotkey(&cfg.hotkey).is_some());
         assert_eq!(cfg.max_recording_minutes, 5);
         assert_eq!(cfg.theme, "hinomaru");
         assert_eq!(cfg.format.timeout_ms, 10000);

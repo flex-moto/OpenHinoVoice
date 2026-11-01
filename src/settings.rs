@@ -11,8 +11,39 @@ use crate::startup;
 use eframe::egui::{self, Color32, RichText};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
 use windows::Win32::Foundation::HWND;
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+#[cfg(windows)]
+type ClipboardOwner = HWND;
+#[cfg(target_os = "macos")]
+type ClipboardOwner = paste::Owner;
+
+// 画面の文言のうち OS ごとに違うもの
+#[cfg(windows)]
+mod os_text {
+    pub const THEME_AUTO: &str = "Windows のライト、ダークに合わせる";
+    pub const STARTUP: &str = "Windows にサインインしたときに起動する";
+    pub const HISTORY_PATH: &str = "%APPDATA%\\OpenHinoVoice\\format-history.jsonl";
+    pub const DEFAULT_MIC: &str = "Windowsの既定デバイス";
+    pub const SPEECH_EXE: &str = "speech.exe";
+    pub const RECOVERY_CRYPTO: &str = "Windowsのユーザーに紐づく暗号化";
+    pub const HOTKEY_EXAMPLE: &str = "例: Ctrl+Alt+J、F8";
+}
+#[cfg(target_os = "macos")]
+mod os_text {
+    pub const THEME_AUTO: &str = "macOS のライト、ダークに合わせる";
+    pub const STARTUP: &str = "Mac にログインしたときに起動する";
+    pub const HISTORY_PATH: &str =
+        "~/Library/Application Support/OpenHinoVoice/format-history.jsonl";
+    pub const DEFAULT_MIC: &str = "macOSの既定デバイス";
+    pub const SPEECH_EXE: &str = "speech";
+    pub const RECOVERY_CRYPTO: &str = "キーチェーンに置いた鍵による暗号化";
+    pub const HOTKEY_EXAMPLE: &str =
+        "例: Ctrl+Alt+V、Cmd+Shift+J、F8。Alt は option、Cmd(Win) は command";
+}
 
 const HINOMARU_RED: Color32 = Color32::from_rgb(188, 0, 45);
 const OK_GREEN: Color32 = Color32::from_rgb(40, 140, 70);
@@ -54,6 +85,8 @@ fn use_japanese_font(ctx: &egui::Context) {
     for path in [
         r"C:\Windows\Fonts\YuGothM.ttc",
         r"C:\Windows\Fonts\meiryo.ttc",
+        "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
     ] {
         if let Ok(bytes) = std::fs::read(path) {
             fonts
@@ -111,14 +144,47 @@ fn take<T>(job: &mut Option<Job<T>>) -> Option<T> {
     result
 }
 
+/// 設定画面上のボタンからのみ呼ぶ。macOS のクリップボードに持ち主のウィンドウは要らない
+#[cfg(target_os = "macos")]
+fn settings_clipboard_owner() -> Result<ClipboardOwner, String> {
+    Ok(paste::Owner)
+}
+
+#[cfg(target_os = "macos")]
+fn check_settings_clipboard_owner(_owner: ClipboardOwner) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn owner_to_raw(_owner: ClipboardOwner) -> isize {
+    0
+}
+
+#[cfg(target_os = "macos")]
+fn owner_from_raw(_raw: isize) -> ClipboardOwner {
+    paste::Owner
+}
+
+#[cfg(windows)]
+fn owner_to_raw(owner: ClipboardOwner) -> isize {
+    owner.0 as isize
+}
+
+#[cfg(windows)]
+fn owner_from_raw(raw: isize) -> ClipboardOwner {
+    HWND(raw as *mut std::ffi::c_void)
+}
+
 /// 設定画面上のボタンからのみ呼ぶ。実在する自プロセスのウィンドウを
 /// clipboard owner に渡す（HWND::default() では SetClipboardData が失敗する）。
+#[cfg(windows)]
 fn settings_clipboard_owner() -> Result<HWND, String> {
     let window = unsafe { GetForegroundWindow() };
     check_settings_clipboard_owner(window)?;
     Ok(window)
 }
 
+#[cfg(windows)]
 fn check_settings_clipboard_owner(window: HWND) -> Result<(), String> {
     if window.0.is_null() {
         return Err("設定ウィンドウを取得できません".into());
@@ -133,7 +199,7 @@ fn check_settings_clipboard_owner(window: HWND) -> Result<(), String> {
 
 /// 3秒の待機は別スレッド、実際の貼り付けは設定画面のUIスレッド(STA)で行う。
 /// OLEクリップボードの参照を一時ワーカースレッドに残さないため。
-fn repaste_after_switch(text: &str, owner: HWND) -> Result<String, String> {
+fn repaste_after_switch(text: &str, owner: ClipboardOwner) -> Result<String, String> {
     // 待機中に設定ウィンドウが閉じられていたら、安全に中断する。
     check_settings_clipboard_owner(owner)?;
     let target = paste::capture_target()?;
@@ -330,7 +396,7 @@ impl eframe::App for Settings {
             }));
         }
         if let Some((text, owner)) = take(&mut self.history_paste_job) {
-            let owner = HWND(owner as *mut std::ffi::c_void);
+            let owner = owner_from_raw(owner);
             self.history_message = Some(match repaste_after_switch(&text, owner) {
                 Ok(message) => message,
                 Err(message) => format!("貼り直せませんでした: {message}。履歴は残っています"),
@@ -447,7 +513,10 @@ impl Settings {
             ui.vertical(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.cfg.hotkey).desired_width(180.0));
                 if config::parse_hotkey(&self.cfg.hotkey).is_none() {
-                    ui.colored_label(HINOMARU_RED, "書き方が正しくありません(例: Ctrl+Alt+J、F8)");
+                    ui.colored_label(
+                        HINOMARU_RED,
+                        format!("書き方が正しくありません({})", os_text::HOTKEY_EXAMPLE),
+                    );
                 } else {
                     hint(
                         ui,
@@ -484,16 +553,12 @@ impl Settings {
                     "hinomaru".to_string(),
                     "日の丸(白地に赤い点)",
                 );
-                ui.radio_value(
-                    &mut self.cfg.theme,
-                    "auto".to_string(),
-                    "Windows のライト、ダークに合わせる",
-                );
+                ui.radio_value(&mut self.cfg.theme, "auto".to_string(), os_text::THEME_AUTO);
             });
             ui.end_row();
 
             ui.label("自動起動");
-            ui.checkbox(&mut self.startup, "Windows にサインインしたときに起動する");
+            ui.checkbox(&mut self.startup, os_text::STARTUP);
             ui.end_row();
         });
     }
@@ -594,7 +659,7 @@ impl Settings {
             &mut self.cfg.format.save_history,
             "原文とAI整形結果をこのPCに保存する（改善用）",
         );
-        hint(ui, "オフが初期値。オンにすると %APPDATA%\\OpenHinoVoice\\format-history.jsonl に原文・結果・エラーとモデル情報が平文で保存されます。外部には履歴を送信しません");
+        hint(ui, &format!("オフが初期値。オンにすると {} に原文・結果・エラーとモデル情報が平文で保存されます。外部には履歴を送信しません", os_text::HISTORY_PATH));
 
         ui.add_space(10.0);
         egui::CollapsingHeader::new("指示文(整形のしかた)").show(ui, |ui| {
@@ -779,7 +844,7 @@ impl Settings {
             ui.label("マイク");
             ui.horizontal(|ui| {
                 let current = if self.cfg.microphone.trim().is_empty() {
-                    "Windowsの既定デバイス".to_string()
+                    os_text::DEFAULT_MIC.to_string()
                 } else {
                     self.cfg.microphone.clone()
                 };
@@ -790,7 +855,7 @@ impl Settings {
                         ui.selectable_value(
                             &mut self.cfg.microphone,
                             String::new(),
-                            "Windowsの既定デバイス",
+                            os_text::DEFAULT_MIC,
                         );
                         for name in &self.microphones {
                             ui.selectable_value(&mut self.cfg.microphone, name.clone(), name);
@@ -832,7 +897,7 @@ impl Settings {
             });
             ui.end_row();
 
-            ui.label("speech.exe");
+            ui.label(os_text::SPEECH_EXE);
             ui.vertical(|ui| {
                 ui.add(
                     egui::TextEdit::singleline(&mut self.cfg.speech_exe)
@@ -995,7 +1060,7 @@ impl Settings {
             &mut self.cfg.recovery_history,
             "認識した文章を復旧用にローカル保存する",
         );
-        hint(ui, "既定でオン。文章はWindowsのユーザーに紐づく暗号化で保存。最大200件・16MiBの短期履歴です。設定を保存すると反映されます。");
+        hint(ui, &format!("既定でオン。文章は{}で保存。最大200件・16MiBの短期履歴です。設定を保存すると反映されます。", os_text::RECOVERY_CRYPTO));
         ui.horizontal(|ui| {
             if ui.button("履歴を更新").clicked() {
                 self.reload_history();
@@ -1080,7 +1145,7 @@ impl Settings {
                             Ok(owner) => {
                                 self.history_message =
                                     Some("貼り付け先へ切り替えてください".into());
-                                let owner = owner.0 as isize;
+                                let owner = owner_to_raw(owner);
                                 self.history_paste_job = Some(spawn(ui.ctx(), move || {
                                     std::thread::sleep(Duration::from_secs(3));
                                     (text, owner)
@@ -1160,7 +1225,7 @@ impl Settings {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod clipboard_tests {
     use super::*;
     use windows::core::w;
