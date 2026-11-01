@@ -1,24 +1,16 @@
-//! Windows の DPAPI の代わり。鍵はキーチェーンに置き、データは AES-256-GCM で暗号化する
-//! キーチェーンの鍵は、この Mac のこのユーザーでログインしているときだけ取り出せる
+//! Windows の DPAPI の代わり。データは AES-256-GCM で暗号化し、鍵は設定フォルダの storage.key に置く
+//! 鍵のファイルはこのユーザーだけが読める(600)。DPAPI と同じく、ほかのユーザーからは読めず、
+//! このユーザーで動くプログラムからは読める。キーチェーンに置くと、アプリを作り直したり更新したりするたびに
+//! 「キーチェーンの情報を使おうとしています」と聞かれるため使わない
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
-#[cfg(not(test))]
-use security_framework::passwords::{get_generic_password, set_generic_password};
 use std::sync::OnceLock;
 
-#[cfg(not(test))]
-const SERVICE: &str = "OpenHinoVoice";
-#[cfg(not(test))]
-const ACCOUNT: &str = "storage-key";
 const MAGIC: &[u8; 4] = b"OHV1";
 const NONCE_LEN: usize = 12;
-// security-framework が返す errSecItemNotFound
-#[cfg(not(test))]
-const ITEM_NOT_FOUND: i32 = -25300;
 
-/// テストではキーチェーンに触らない。テストの実行ファイルは作るたびに名前と署名が変わり、
-/// そのたびに「キーチェーンの情報を使おうとしています」と聞かれてしまう
+/// テストでは本物の鍵のファイルに触らない
 #[cfg(test)]
 fn key() -> Result<[u8; 32], String> {
     static KEY: OnceLock<[u8; 32]> = OnceLock::new();
@@ -35,21 +27,45 @@ fn key() -> Result<[u8; 32], String> {
     if let Some(k) = KEY.get() {
         return Ok(*k);
     }
-    let k = match get_generic_password(SERVICE, ACCOUNT) {
-        Ok(bytes) => bytes
+    let k = load_or_create_key(&crate::mac::app_dir().join("storage.key"))?;
+    Ok(*KEY.get_or_init(|| k))
+}
+
+/// 常駐側と設定画面が同時に作ろうとしても、先に作られた方を使う
+#[cfg_attr(test, allow(dead_code))]
+fn load_or_create_key(path: &std::path::Path) -> Result<[u8; 32], String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let read = |path: &std::path::Path| -> Result<[u8; 32], String> {
+        std::fs::read(path)
+            .map_err(|e| format!("暗号化の鍵を読めません: {e}"))?
             .as_slice()
             .try_into()
-            .map_err(|_| "キーチェーンの鍵の形式が不正です".to_string())?,
-        Err(e) if e.code() == ITEM_NOT_FOUND => {
-            let mut fresh = [0u8; 32];
-            getrandom::fill(&mut fresh).map_err(|e| format!("乱数を作れません: {e}"))?;
-            set_generic_password(SERVICE, ACCOUNT, &fresh)
-                .map_err(|e| format!("キーチェーンに鍵を保存できません: {e}"))?;
-            fresh
-        }
-        Err(e) => return Err(format!("キーチェーンから鍵を読めません: {e}")),
+            .map_err(|_| "暗号化の鍵の形式が不正です".to_string())
     };
-    Ok(*KEY.get_or_init(|| k))
+    if path.exists() {
+        return read(path);
+    }
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("設定フォルダを作れません: {e}"))?;
+    }
+    let mut fresh = [0u8; 32];
+    getrandom::fill(&mut fresh).map_err(|e| format!("乱数を作れません: {e}"))?;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+    {
+        Ok(mut file) => {
+            file.write_all(&fresh)
+                .and_then(|_| file.sync_all())
+                .map_err(|e| format!("暗号化の鍵を保存できません: {e}"))?;
+            Ok(fresh)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => read(path),
+        Err(e) => Err(format!("暗号化の鍵を保存できません: {e}")),
+    }
 }
 
 /// 今の macOS ユーザーだけが復号できる形に暗号化する
@@ -91,5 +107,17 @@ mod tests {
         *broken.last_mut().unwrap() ^= 1;
         assert!(unprotect(&broken).is_err());
         assert!(unprotect(b"OHV1").is_err());
+    }
+
+    #[test]
+    fn key_file_is_private_and_reused() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("ohv-key-{}", std::process::id()));
+        let path = dir.join("storage.key");
+        let first = load_or_create_key(&path).unwrap();
+        assert_eq!(load_or_create_key(&path).unwrap(), first);
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

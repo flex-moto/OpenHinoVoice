@@ -40,7 +40,7 @@ mod os_text {
         "~/Library/Application Support/OpenHinoVoice/format-history.jsonl";
     pub const DEFAULT_MIC: &str = "macOSの既定デバイス";
     pub const SPEECH_EXE: &str = "speech";
-    pub const RECOVERY_CRYPTO: &str = "キーチェーンに置いた鍵による暗号化";
+    pub const RECOVERY_CRYPTO: &str = "このユーザーだけが読める鍵による暗号化";
     pub const HOTKEY_EXAMPLE: &str =
         "例: Ctrl+Alt+V、Cmd+Shift+J、F8。Alt は option、Cmd(Win) は command";
 }

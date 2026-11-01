@@ -96,7 +96,7 @@ scripts/macos/bundle.sh
 | 録音を始めるキー | 初めは control + option + V(Mac の F キーは音量などを兼ねるため)。設定の画面で変えられます。Alt は option、Win(Cmd) は command キーです |
 | アイコン | 画面右上のメニューバーに、白い縁の赤い丸が出ます |
 | 設定と履歴の場所 | `~/Library/Application Support/OpenHinoVoice` |
-| 秘密の情報の暗号化 | 鍵をキーチェーンに置き、AES-256-GCM で暗号化します(Windows では DPAPI) |
+| 秘密の情報の暗号化 | AES-256-GCM で暗号化します。鍵は本人だけが読める `storage.key` に置きます(Windows では DPAPI) |
 | 自動起動 | `~/Library/LaunchAgents/io.github.openhinovoice.plist` を置きます |
 
 ## AI に導入を任せる

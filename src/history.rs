@@ -1,4 +1,4 @@
-//! 復旧用の短期履歴（Windows は DPAPI、macOS はキーチェーンの鍵で暗号化）と、利用者が opt-in した改善用の整形ログ。
+//! 復旧用の短期履歴（Windows は DPAPI、macOS は鍵のファイルで暗号化）と、利用者が opt-in した改善用の整形ログ。
 use crate::config::{self, FormatConfig};
 use crate::format::FormatError;
 use serde::{Deserialize, Serialize};

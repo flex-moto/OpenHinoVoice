@@ -1,6 +1,6 @@
 //! Sign in with ChatGPT(オープンソース向けの ChatGPT プラン利用)。
 //! 手順は https://developers.openai.com/siwc/token-sharing-open-source に従う。
-//! ブラウザで認可し、127.0.0.1 の受け口でコードを受け取り、トークンに換えて暗号化して保存する(Windows は DPAPI、macOS はキーチェーンの鍵)。
+//! ブラウザで認可し、127.0.0.1 の受け口でコードを受け取り、トークンに換えて暗号化して保存する(Windows は DPAPI、macOS は本人だけが読める鍵のファイル)。
 
 use crate::format::FormatError;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
