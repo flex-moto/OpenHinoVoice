@@ -3,16 +3,33 @@
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
+#[cfg(not(test))]
 use security_framework::passwords::{get_generic_password, set_generic_password};
 use std::sync::OnceLock;
 
+#[cfg(not(test))]
 const SERVICE: &str = "OpenHinoVoice";
+#[cfg(not(test))]
 const ACCOUNT: &str = "storage-key";
 const MAGIC: &[u8; 4] = b"OHV1";
 const NONCE_LEN: usize = 12;
 // security-framework が返す errSecItemNotFound
+#[cfg(not(test))]
 const ITEM_NOT_FOUND: i32 = -25300;
 
+/// テストではキーチェーンに触らない。テストの実行ファイルは作るたびに名前と署名が変わり、
+/// そのたびに「キーチェーンの情報を使おうとしています」と聞かれてしまう
+#[cfg(test)]
+fn key() -> Result<[u8; 32], String> {
+    static KEY: OnceLock<[u8; 32]> = OnceLock::new();
+    Ok(*KEY.get_or_init(|| {
+        let mut k = [0u8; 32];
+        getrandom::fill(&mut k).expect("system random number generator failed");
+        k
+    }))
+}
+
+#[cfg(not(test))]
 fn key() -> Result<[u8; 32], String> {
     static KEY: OnceLock<[u8; 32]> = OnceLock::new();
     if let Some(k) = KEY.get() {
@@ -59,4 +76,20 @@ pub fn unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
     Aes256Gcm::new(&key()?.into())
         .decrypt(Nonce::from_slice(nonce), sealed)
         .map_err(|_| "データを復号できません".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sealed_data_round_trips_and_detects_tampering() {
+        let sealed = protect(b"secret").unwrap();
+        assert!(sealed.starts_with(MAGIC));
+        assert_eq!(unprotect(&sealed).unwrap(), b"secret");
+        let mut broken = sealed.clone();
+        *broken.last_mut().unwrap() ^= 1;
+        assert!(unprotect(&broken).is_err());
+        assert!(unprotect(b"OHV1").is_err());
+    }
 }

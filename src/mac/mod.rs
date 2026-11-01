@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn file_lock_excludes_a_second_holder_until_released() {
-        let name = format!("test-{}", std::process::id());
+        let name = format!("test_{}", std::process::id());
         let first = FileLock::try_acquire(&name).expect("first lock");
         assert!(FileLock::try_acquire(&name).is_none());
         assert!(FileLock::acquire(&name, Duration::from_millis(50)).is_err());

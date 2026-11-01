@@ -2,7 +2,8 @@
 # macOS 用の OpenHinoVoice.app を作る。使い方: scripts/macos/bundle.sh [出力先フォルダ]
 # 出力先を省くと target/release に置く。署名は自分の Mac で動かすためのアドホック署名
 # アドホック署名は作り直すたびに変わり、アクセシビリティの許可が外れる。
-# 証明書があれば CODESIGN_IDENTITY="名前" を付けて実行すると、作り直しても許可が残る
+# 証明書があれば CODESIGN_IDENTITY="名前" を付けて実行すると、作り直しても許可が残る。
+# 指定がなく、キーチェーンに「OpenHinoVoice Local Signing」があれば、それを使う
 set -eu
 
 cd "$(dirname "$0")/../.."
@@ -48,5 +49,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign "${CODESIGN_IDENTITY:--}" "$app"
+identity=${CODESIGN_IDENTITY:-}
+if [ -z "$identity" ] && security find-identity -p codesigning | grep -q '"OpenHinoVoice Local Signing"'; then
+    identity="OpenHinoVoice Local Signing"
+fi
+codesign --force --sign "${identity:--}" "$app"
 echo "$app"
